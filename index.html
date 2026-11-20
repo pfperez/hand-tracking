@@ -249,6 +249,7 @@
     let smoothed = null;
     let notPointingFrames = 0;
     let lostFrames = 0;
+    let isCurrentlyPointing = false; // hysteresis state
 
     document.querySelectorAll('.swatch').forEach(el => {
       el.addEventListener('click', () => {
@@ -305,12 +306,27 @@
       return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
-    // Drawing gesture: index extended, middle finger NOT extended
-    // (so open hand or peace sign won't draw)
+    // Drawing gesture with hysteresis:
+    // - To START drawing: index clearly up AND middle clearly curled (high bar)
+    // - To STOP drawing: index goes down OR middle clearly extends (low bar)
+    // This prevents rapid flickering when the middle finger is borderline.
     function isPointingGesture(lm) {
       const indexUp = lm[8].y < lm[6].y;
-      const middleUp = lm[12].y < lm[10].y;
-      return indexUp && !middleUp;
+      // middleCurl > 0: tip is below PIP (finger curled); < 0: tip is above PIP (extended)
+      const middleCurl = lm[12].y - lm[10].y;
+
+      if (isCurrentlyPointing) {
+        // Stay in drawing mode unless index drops OR middle clearly extends
+        if (!indexUp || middleCurl < -0.015) {
+          isCurrentlyPointing = false;
+        }
+      } else {
+        // Enter drawing mode only when index is clearly up AND middle clearly curled
+        if (indexUp && middleCurl > 0.04) {
+          isCurrentlyPointing = true;
+        }
+      }
+      return isCurrentlyPointing;
     }
 
     function drawSkeleton(lm, w, h) {
@@ -346,9 +362,10 @@
 
       if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
         lostFrames++;
-        if (lostFrames > 4) {
+        if (lostFrames > 8) {
           prevPoint = null;
           smoothed = null;
+          isCurrentlyPointing = false;
         } else {
           prevPoint = null; // don't connect across a gap but keep smoothed position
         }
@@ -369,15 +386,15 @@
       const ratio = handSize > 0 ? fingerDist / handSize : 1;
 
       const now = Date.now();
-      const isPinching = ratio < 0.35;
+      const isPinching = ratio < 0.28;
 
-      // Pinch toggles eraser (debounced)
-      if (isPinching && !pinchActive && now - lastToggleTime > 600) {
+      // Pinch toggles eraser (debounced — longer to prevent accidental triggers)
+      if (isPinching && !pinchActive && now - lastToggleTime > 1200) {
         isEraserMode = !isEraserMode;
         pinchActive = true;
         lastToggleTime = now;
       }
-      if (!isPinching && ratio > 0.55) {
+      if (!isPinching && ratio > 0.50) {
         pinchActive = false;
       }
 
@@ -393,8 +410,8 @@
       if (!smoothed) {
         smoothed = { x, y };
       } else {
-        smoothed.x = smoothed.x * 0.82 + x * 0.18;
-        smoothed.y = smoothed.y * 0.82 + y * 0.18;
+        smoothed.x = smoothed.x * 0.72 + x * 0.28;
+        smoothed.y = smoothed.y * 0.72 + y * 0.28;
       }
 
       cursor.style.display = 'block';
@@ -437,7 +454,7 @@
         }
       } else {
         notPointingFrames++;
-        if (notPointingFrames > 3) {
+        if (notPointingFrames > 8) {
           prevPoint = null;
         }
       }
@@ -451,8 +468,8 @@
         hands.setOptions({
           maxNumHands: 1,
           modelComplexity: 1,
-          minDetectionConfidence: 0.75,
-          minTrackingConfidence: 0.7
+          minDetectionConfidence: 0.6,
+          minTrackingConfidence: 0.55
         });
         hands.onResults(onResults);
 
